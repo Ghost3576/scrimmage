@@ -19,6 +19,7 @@ foreach(PROTO_FILE ${PROTO_FILE_LIST})
   get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
   get_filename_component(ABS_PROTO_NAME ${PROTO_FILE} REALPATH)
   get_filename_component(PROTO_PATH ${ABS_PROTO_NAME} DIRECTORY)
+  get_filename_component(SCRIMMAGE_PROTO_PATH ${SCRIMMAGE_PROTO_PATH} REALPATH)
 
   set(PROTO_FILE_GEN_CPP_FILES
     ${GEN_DIR}/${PROTO_NAME}.pb.cc
@@ -46,15 +47,15 @@ foreach(PROTO_FILE ${PROTO_FILE_LIST})
   if (GRPC_FOUND)
     add_custom_command(
       OUTPUT ${PROTO_FILE_GEN_FILES}
-      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --cpp_out=${GEN_DIR} --grpc_out=${GEN_DIR} --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
-      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --python_out=${GEN_DIR} --grpc_python_out=${GEN_DIR} --plugin=protoc-gen-grpc_python=${GRPC_PYTHON_PLUGIN}
+      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --proto_path=${SCRIMMAGE_PROTO_PATH} --cpp_out=${GEN_DIR} --grpc_out=${GEN_DIR} --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --proto_path=${SCRIMMAGE_PROTO_PATH} --python_out=${GEN_DIR} --grpc_python_out=${GEN_DIR} --plugin=protoc-gen-grpc_python=${GRPC_PYTHON_PLUGIN}
       DEPENDS ${PROTO_FILE}
       WORKING_DIRECTORY ${PROTO_PATH}
       )
   else()
     add_custom_command(
       OUTPUT ${PROTO_FILE_GEN_FILES}
-      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --cpp_out=${GEN_DIR} --python_out=${GEN_DIR}
+      COMMAND ${PROTOBUF_PROTOC_EXECUTABLE} ${ABS_PROTO_NAME} --proto_path=${PROTO_PATH} --proto_path=${SCRIMMAGE_PROTO_PATH} --cpp_out=${GEN_DIR} --python_out=${GEN_DIR}
       DEPENDS ${PROTO_FILE}
       WORKING_DIRECTORY ${PROTO_PATH}
       )
@@ -85,6 +86,8 @@ ADD_LIBRARY( ${LIBRARY_NAME} SHARED
   ${GEN_CPP_FILES}
   ${GEN_H_FILES}
   )
+
+add_dependencies(${PROJECT_NAME}-msgs scrimmage-protos)
 
 target_link_libraries(${LIBRARY_NAME}
   ${PROTOBUF_LIBRARIES}

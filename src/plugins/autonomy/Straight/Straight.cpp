@@ -31,6 +31,7 @@
  */
 
 #include <scrimmage/common/Utilities.h>
+#include <scrimmage/common/Time.h>
 #include <scrimmage/entity/Entity.h>
 #include <scrimmage/math/State.h>
 #include <scrimmage/math/Angles.h>
@@ -80,6 +81,16 @@ void Straight::init(std::map<std::string, std::string> &params) {
     show_camera_images_ = scrimmage::get<bool>("show_camera_images", params, false);
     save_camera_images_ = scrimmage::get<bool>("save_camera_images", params, false);
     show_text_label_ = scrimmage::get<bool>("show_text_label", params, false);
+
+    // Set the desired_z to our initial position.
+    desired_z_ = state_->pos()(2);
+
+    // Register the desired_z parameter with the parameter server
+    auto param_cb = [&](const double &desired_z) {
+        std::cout << "desired_z param changed at: " << time_->t()
+        << ", with value: " << desired_z << endl;
+    };
+    register_param<double>("desired_z", desired_z_, param_cb);
 
     if (save_camera_images_) {
         /////////////////////////////////////////////////////////
@@ -141,6 +152,11 @@ void Straight::init(std::map<std::string, std::string> &params) {
     };
     subscribe<State>("LocalNetwork", "NoisyState", state_cb);
 
+    auto noisy_contacts_cb = [&](auto &msg) {
+        noisy_contacts_ = msg->data; // Save map of noisy contacts
+    };
+    subscribe<std::map<int, State>>("LocalNetwork", "NoisyContacts", noisy_contacts_cb);
+
 #if (ENABLE_OPENCV == 1 && ENABLE_AIRSIM == 1)
     auto airsim_cb = [&](auto &msg) {
         for (sc::sensor::AirSimSensorType a : msg->data) {
@@ -150,7 +166,7 @@ void Straight::init(std::map<std::string, std::string> &params) {
             }
         }
     };
-    subscribe<sensor::AirSimSensorType>>("LocalNetwork", "AirSim");
+    subscribe<sensor::AirSimSensorType>>("LocalNetwork", "AirSim", airsim_cb);
 #endif
 
 #if ENABLE_OPENCV == 1
@@ -166,7 +182,7 @@ void Straight::init(std::map<std::string, std::string> &params) {
             cv::waitKey(1);
         }
     };
-    subscribe<sc::sensor::ContactBlobCameraType>("LocalNetwork", "ContactBlobCamera");
+    subscribe<sc::sensor::ContactBlobCameraType>("LocalNetwork", "ContactBlobCamera", blob_cb);
 #endif
 
     desired_alt_idx_ = vars_.declare(VariableIO::Type::desired_altitude, VariableIO::Direction::Out);
@@ -211,9 +227,8 @@ bool Straight::step_autonomy(double t, double dt) {
     ///////////////////////////////////////////////////////////////////////////
     // Convert desired velocity to desired speed, heading, and pitch controls
     ///////////////////////////////////////////////////////////////////////////
-
     double heading = Angles::angle_2pi(atan2(v(1), v(0)));
-    vars_.output(desired_alt_idx_, goal_(2));
+    vars_.output(desired_alt_idx_, desired_z_);
     vars_.output(desired_speed_idx_, v.norm());
     vars_.output(desired_heading_idx_, heading);
 

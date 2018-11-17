@@ -184,7 +184,7 @@ bool CSV::read_csv(const std::string &filename, bool contains_header) {
 
 void CSV::set_no_value_string(const std::string &str) { no_value_str_ = str; }
 
-int CSV::rows() { return table_.size(); }
+size_t CSV::rows() { return table_.size(); }
 
 double CSV::at(int row, const std::string &header) {
     const int column = column_headers_.at(header);
@@ -235,7 +235,11 @@ void CSV::write_row(int row) {
     // column_headers, use column index to fill in columne for values.
     std::vector<std::string> values(column_headers_.size(), no_value_str_);
     for (auto &kv : table_[row]) {
-        values[kv.first] = std::to_string(kv.second);
+        if (static_cast<int64_t>(kv.second) == kv.second) {
+            values[kv.first] = std::to_string(static_cast<int64_t>(kv.second));
+        } else {
+            values[kv.first] = std::to_string(kv.second);
+        }
     }
 
     // Write out the values to the csv file

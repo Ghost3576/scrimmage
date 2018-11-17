@@ -24,21 +24,25 @@ if(NOT CMAKE_INSTALL_PREFIX)
   set(CMAKE_INSTALL_PREFIX /usr/local)
 endif()
 
-# fetch all the local directories for generated code
-get_filename_component(SCRIMMAGE_LIB_DIR ${PROJECT_BINARY_DIR}/lib ABSOLUTE)
-get_filename_component(PROJECT_PLUGIN_LIBS_DIR ${PROJECT_BINARY_DIR}/plugin_libs ABSOLUTE)
-get_filename_component(SCRIMMAGE_BIN_DIR ${PROJECT_BINARY_DIR}/bin ABSOLUTE)
-get_filename_component(SCRIMMAGE_INC_DIR ./include ABSOLUTE)
-get_filename_component(SCRIMMAGE_SRC_DIR ./src ABSOLUTE)
-get_filename_component(SCRIMMAGE_SHARE_DIR ./share ABSOLUTE)
-get_filename_component(SCRIMMAGE_SCRIPTS_DIR ./scripts ABSOLUTE)
-get_filename_component(SCRIMMAGE_SETUP_DIR ./setup ABSOLUTE)
-get_filename_component(PROJECT_MODULES_DIR ./cmake/Modules ABSOLUTE)
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../lib/${PROJECT_NAME}/plugin_libs" CACHE STRING "The installed RPATH")
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_MODULES_DIR}
+# fetch all the local directories for generated code
+get_filename_component(PROJECT_PLUGIN_LIBS_DIR ${PROJECT_BINARY_DIR}/plugin_libs ABSOLUTE)
+get_filename_component(SCRIMMAGE_INC_DIR ./include ABSOLUTE)
+get_filename_component(SCRIMMAGE_SCRIPTS_DIR ./scripts ABSOLUTE)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake/Modules
   ${PROJECT_SOURCE_DIR}/share/cmake/${PROJECT_NAME})
 
 set(SCRIMMAGE_PYTHON_DIR ${PROJECT_SOURCE_DIR}/python)
+set(SCRIMMAGE_PROTO_PATH ${CMAKE_CURRENT_LIST_DIR}/src/proto)
+set(MSGS_INCLUDE_DIR ${PROJECT_BINARY_DIR}/msgs)
+set(PROTO_INCLUDE_DIR ${PROJECT_BINARY_DIR}/src/proto)
+
+include_directories(${PROTO_INCLUDE_DIR})
 
 include(MacroAddExternalTarget)
 include(MacroSubDirList)
@@ -54,50 +58,43 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
+# macOS requires additional directories added to the path
+set(APPEND_TO_PATH "")
+if(APPLE)
+  set(CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS} -undefined dynamic_lookup")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-return-type-c-linkage")
+  string(JOIN ":" APPEND_TO_PATH
+    "${PROJECT_BINARY_DIR}/bin/scrimmage.app/Contents/MacOS"
+    "${PROJECT_BINARY_DIR}/bin/scrimmage-playback.app/Contents/MacOS"
+    "${PROJECT_BINARY_DIR}/bin/scrimmage-viz.app/Contents/MacOS")
+endif()
+
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall") # -fprofile-arcs -ftest-coverage")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wall") # -fprofile-arcs -ftest-coverage")
-
-set(EXECUTABLE_OUTPUT_PATH ${SCRIMMAGE_BIN_DIR})
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${SCRIMMAGE_LIB_DIR})
-
-## set the cmake defaults for libraries and binaries
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${SCRIMMAGE_LIB_DIR} CACHE PATH
-  "Output directory for the dynamic libraries" )
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${SCRIMMAGE_BIN_DIR} CACHE PATH
-  "Output directory for the binaries" )
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${SCRIMMAGE_LIB_DIR} CACHE PATH
-  "Output directory for the static libraries (archives)" )
 
 option(SETUP_HOME_CONFIG "Setup ~/.scrimmage" ON)
 set(LOCAL_CONFIG_DIR "$ENV{HOME}/.scrimmage" CACHE PATH "Local ~/.scrimmage config directory")
 include(GenerateSetEnv)
+
 GenerateSetEnv(
   SETUP_LOCAL_CONFIG_DIR ${SETUP_HOME_CONFIG}
   LOCAL_CONFIG_DIR ${LOCAL_CONFIG_DIR}
-  SETENV_IN_FILE ${PROJECT_SOURCE_DIR}/share/cmake/scrimmage/setenv.in
-  MISSION_PATH ${PROJECT_SOURCE_DIR}/missions
-  PLUGIN_PATH ${PROJECT_BINARY_DIR}/plugin_libs
-              ${PROJECT_SOURCE_DIR}/include/${PROJECT_NAME}/plugins
-  PATH ${PROJECT_BINARY_DIR}/bin ${SCRIMMAGE_SCRIPTS_DIR}
-  CONFIG_PATH ${PROJECT_SOURCE_DIR}/config
-  DATA_PATH ${PROJECT_SOURCE_DIR}/data
-  PYTHONPATH ${PROJECT_SOURCE_DIR}/src/plugins/autonomy/python
-             ${PROJECT_BINARY_DIR}/msgs/scrimmage/msgs
-  )
-
-set(MSGS_INCLUDE_DIR ${PROJECT_BINARY_DIR}/msgs)
-set(PROTO_INCLUDE_DIR ${PROJECT_BINARY_DIR}/src/proto)
-
-include_directories(${SCRIMMAGE_INC_DIR})
-include_directories(${MSGS_INCLUDE_DIR})
-include_directories(${PROTO_INCLUDE_DIR})
+  SETENV_IN_FILE   ${PROJECT_SOURCE_DIR}/share/cmake/scrimmage/setenv.in
+  MISSION_PATH     ${PROJECT_SOURCE_DIR}/missions
+  PLUGIN_PATH      ${PROJECT_BINARY_DIR}/plugin_libs
+                   ${PROJECT_SOURCE_DIR}/include/${PROJECT_NAME}/plugins
+  PATH             ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} ${SCRIMMAGE_SCRIPTS_DIR} ${APPEND_TO_PATH}
+  CONFIG_PATH      ${PROJECT_SOURCE_DIR}/config
+  DATA_PATH        ${PROJECT_SOURCE_DIR}/data
+  PYTHONPATH       ${PROJECT_SOURCE_DIR}/src/plugins/autonomy/python
+                   ${PROJECT_BINARY_DIR}/msgs/scrimmage/msgs
+                   )
 
 option(EXTERNAL "EXTERNAL" 0)
 
 option(ENABLE_PYTHON_BINDINGS "ENABLE_PYTHON_BINDINGS" ON)
 set(PYTHON_MIN_VERSION "2.7" CACHE STRING "Minimum Python version for building")
 if (ENABLE_PYTHON_BINDINGS)
-  add_definitions(-DENABLE_PYTHON_BINDINGS=1)
 
   # Find Python
   #The order of the followin find_package calls is important!
@@ -109,22 +106,24 @@ if (ENABLE_PYTHON_BINDINGS)
   message(STATUS "PYTHON_INCLUDE_DIRS: ${PYTHON_INCLUDE_DIRS}")
 
   set(PYTHON_FOUND TRUE)
-  include_directories("${PYTHON_INCLUDE_DIRS}")
 
   # We have already found the python libs and modules, so tell pybind11 to not
   # search for the python interpreter and libraries again.
   set(PYTHONLIBS_FOUND TRUE)
   set(PYTHON_MODULE_EXTENSION TRUE)
   find_package(pybind11 REQUIRED)
-  include_directories(${pybind11_INCLUDE_DIRS})
   set(PYBIND11_INCLUDE_DIRS ${pybind11_INCLUDE_DIRS})
 
   add_library(scrimmage-python INTERFACE)
-  target_include_directories(scrimmage-python INTERFACE ${PYTHON_INCLUDE_DIRS} ${pybind11_INCLUDE_DIRS})
+  target_include_directories(scrimmage-python
+      SYSTEM INTERFACE ${PYTHON_INCLUDE_DIRS} ${pybind11_INCLUDE_DIRS})
+  target_compile_definitions(scrimmage-python
+      INTERFACE -DENABLE_PYTHON_BINDINGS=1)
   target_link_libraries(scrimmage-python INTERFACE ${PYTHON_LIBRARIES})
   install(TARGETS scrimmage-python EXPORT ${PROJECT_NAME}-targets)
 else()
-  add_definitions(-DENABLE_PYTHON_BINDINGS=0)
+  target_compile_definitions(scrimmage-python
+      INTERFACE -DENABLE_PYTHON_BINDINGS=0)
 endif()
 
 ########################################################
@@ -150,7 +149,6 @@ else()
   set(PROTOBUF_LIBRARIES "${PROTOBUF_LIBS}")
   set(PROTOBUF_INCLUDE_DIRS "${PROTOBUF_INCLUDE}")
 endif()
-include_directories(${PROTOBUF_INCLUDE_DIRS})
 set(PROTOBUF_INCLUDE ${PROTOBUF_INCLUDE_DIRS})
 
 ########################################################
@@ -169,20 +167,25 @@ endif()
 ########################################################
 find_package (GeographicLib REQUIRED)
 add_definitions (${GeographicLib_DEFINITIONS})
-include_directories (${GeographicLib_INCLUDE_DIRS})
 
 ########################################################
 # Find JSBSim
 ########################################################
-find_package(JSBSIM REQUIRED)
-string(FIND "${JSBSIM_INCLUDE_DIRS}" "NOTFOUND" POS)
-if (JSBSIM_FOUND AND (POS EQUAL -1))
-  include_directories(${JSBSIM_INCLUDE_DIR})
-  add_definitions(-DENABLE_JSBSIM=1)
+if (NOT APPLE)
+  find_package(JSBSIM REQUIRED)
+  string(FIND "${JSBSIM_INCLUDE_DIRS}" "NOTFOUND" POS)
+  if (JSBSIM_FOUND AND (POS EQUAL -1))
+    add_definitions(-DENABLE_JSBSIM=1)
+  else()
+    add_definitions(-DENABLE_JSBSIM=0)
+    message(--------------------------)
+    message("JSBSIM_NOT_FOUND, plugins that use this library will not be built")
+    message(--------------------------)
+  endif()
 else()
   add_definitions(-DENABLE_JSBSIM=0)
   message(--------------------------)
-  message("JSBSIM_NOT_FOUND, plugins that use this library will not be built")
+  message("Apple detected, plugins that use JSBSim will not be built")
   message(--------------------------)
 endif()
 
@@ -231,7 +234,6 @@ if (NOT Eigen3_FOUND)
   set(EIGEN3_INCLUDE_DIR ${EIGEN_PKGCONFIG_INCLUDE_DIRS})
   message("Found Eigen with pkg-config, EIGEN3_INCLUDE_DIR: ${EIGEN3_INCLUDE_DIR}")
 endif()
-include_directories(${EIGEN3_INCLUDE_DIR})
 
 ########################################################
 # Find Boost
@@ -335,13 +337,6 @@ if (NOT DEFINED CMAKE_TOOLCHAIN_FILE AND BUILD_TESTS)
       # the gtest and gtest_main targets.
       add_subdirectory(${PROJECT_BINARY_DIR}/googletest-src
                        ${PROJECT_BINARY_DIR}/googletest-build)
-
-      # The gtest/gtest_main targets carry header search path
-      # dependencies automatically when using CMake 2.8.11 or
-      # later. Otherwise we have to add them here ourselves.
-      if (CMAKE_VERSION VERSION_LESS 2.8.11)
-        include_directories("${gtest_SOURCE_DIR}/include")
-      endif()
   endif()
 
   add_subdirectory(test)
@@ -352,173 +347,177 @@ endif()
 ###############################################################################
 set(PROJECT_DESCRIPTION "A multi-agent simulator")
 
-if (UNIX AND NOT APPLE)
-  # - Add each library to LIBS_STRING PROJECT_LIBS is a "global" variable that
-  # is passed down to each sub directory and every library that is generated in
-  # this project appends its name to this variable.
-  foreach(I ${PROJECT_LIBS})
-    set (LIBS_STRING "${LIBS_STRING} -l${I}")
-  endforeach()
+# - Add each library to LIBS_STRING
+# SCRIMMAGE_GTRI_SIM_LIBS is a "global" variable that is passed
+# down to each sub directory and every library that is
+# generated in this project appends its name to this
+# variable.
+foreach(I ${PROJECT_LIBS})
+  set (LIBS_STRING "${LIBS_STRING} -l${I}")
+endforeach()
 
-  #############################################################################
-  # Generate the cmake configuration files for the build tree
-  #############################################################################
-  include(CMakePackageConfigHelpers)
+#############################################################################
+# Generate the cmake configuration files for the build tree
+#############################################################################
+include(CMakePackageConfigHelpers)
 
-  # Configure variables used in project-config.cmake.in for build tree
-  set(TMP_INCLUDE_INSTALL_DIR ${PROJECT_SOURCE_DIR}/include)
-  set(TMP_MSGS_INCLUDE_DIR ${MSGS_INCLUDE_DIR})
-  set(TMP_PROTO_INCLUDE_DIR ${PROTO_INCLUDE_DIR})
-  set(SCRIMMAGE_PROTO_PATH ${CMAKE_CURRENT_LIST_DIR}/src/proto)
-  set(SCRIMMAGE_MSGS_PROTO_PATH ${CMAKE_CURRENT_LIST_DIR}/msgs)
-  set(SHARE_INSTALL_DIR ${PROJECT_SOURCE_DIR}/share)
+# Configure variables used in project-config.cmake.in for build tree
+set(TMP_INCLUDE_INSTALL_DIR ${PROJECT_SOURCE_DIR}/include)
+set(TMP_MSGS_INCLUDE_DIR ${MSGS_INCLUDE_DIR})
+set(TMP_PROTO_INCLUDE_DIR ${PROTO_INCLUDE_DIR})
+set(SCRIMMAGE_MSGS_PROTO_PATH ${CMAKE_CURRENT_LIST_DIR}/msgs)
+set(SHARE_INSTALL_DIR ${PROJECT_SOURCE_DIR}/share)
 
-  configure_package_config_file(
-    ${PROJECT_SOURCE_DIR}/cmake/Modules/project-config.cmake.in
-    ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config.cmake
-    INSTALL_DESTINATION ${PROJECT_BINARY_DIR}
-    PATH_VARS TMP_INCLUDE_INSTALL_DIR SCRIMMAGE_PROTO_PATH
-    SCRIMMAGE_MSGS_PROTO_PATH SHARE_INSTALL_DIR
-    )
+configure_package_config_file(
+  ${PROJECT_SOURCE_DIR}/cmake/Modules/project-config.cmake.in
+  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config.cmake
+  INSTALL_DESTINATION ${PROJECT_BINARY_DIR}
+  PATH_VARS TMP_INCLUDE_INSTALL_DIR SCRIMMAGE_PROTO_PATH
+  SCRIMMAGE_MSGS_PROTO_PATH SHARE_INSTALL_DIR
+  )
 
-  write_basic_package_version_file(
-    ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-    )
+write_basic_package_version_file(
+  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion
+  )
 
-  # Export project export set to the build tree
-  export(
-    EXPORT ${PROJECT_NAME}-targets
-    FILE "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-targets.cmake"
-    )
+# Export project export set to the build tree
+export(
+  EXPORT ${PROJECT_NAME}-targets
+  FILE "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-targets.cmake"
+  )
 
-  # Export the package for use from the build-tree
-  # (this registers the build-tree with a global CMake-registry ~/.cmake)
-  export(PACKAGE ${PROJECT_NAME})
+# Export the package for use from the build-tree
+# (this registers the build-tree with a global CMake-registry ~/.cmake)
+export(PACKAGE ${PROJECT_NAME})
 
-  #############################################################################
-  # Generate the cmake configuration files for the install tree
-  #############################################################################
-  set(INCLUDE_INSTALL_DIR include/ CACHE PATH "Include install dir")
-  set(SHARE_INSTALL_DIR share/)
-  set(LIB_INSTALL_DIR lib/ CACHE PATH "Library install dir")
-  set(CMAKE_CONFIG_DEST "${LIB_INSTALL_DIR}/${PROJECT_NAME}/cmake")
+#############################################################################
+# Generate the cmake configuration files for the install tree
+#############################################################################
+set(INCLUDE_INSTALL_DIR include/ CACHE PATH "Include install dir")
+set(SHARE_INSTALL_DIR share/)
+set(LIB_INSTALL_DIR lib/ CACHE PATH "Library install dir")
+set(CMAKE_CONFIG_DEST "${LIB_INSTALL_DIR}/${PROJECT_NAME}/cmake")
 
-  # Configure variables used in project-config.cmake.in for install tree
-  set(TMP_INCLUDE_INSTALL_DIR ${INCLUDE_INSTALL_DIR})
-  unset(TMP_MSGS_INCLUDE_DIR)
-  unset(TMP_PROTO_INCLUDE_DIR)
-  set(SCRIMMAGE_PROTO_PATH ${SHARE_INSTALL_DIR}/${PROJECT_NAME}/proto)
-  set(SCRIMMAGE_MSGS_PROTO_PATH ${SHARE_INSTALL_DIR}/${PROJECT_NAME}/msgs)
+# Configure variables used in project-config.cmake.in for install tree
+set(TMP_INCLUDE_INSTALL_DIR ${INCLUDE_INSTALL_DIR})
+unset(TMP_MSGS_INCLUDE_DIR)
+unset(TMP_PROTO_INCLUDE_DIR)
+set(SCRIMMAGE_PROTO_PATH ${SHARE_INSTALL_DIR}/${PROJECT_NAME}/proto)
+set(SCRIMMAGE_MSGS_PROTO_PATH ${SHARE_INSTALL_DIR}/${PROJECT_NAME}/msgs)
 
-  configure_package_config_file(
-    ${PROJECT_SOURCE_DIR}/cmake/Modules/project-config.cmake.in
-    ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config.cmake
-    INSTALL_DESTINATION ${CMAKE_CONFIG_DEST}
-    PATH_VARS TMP_INCLUDE_INSTALL_DIR SCRIMMAGE_PROTO_PATH
-    SCRIMMAGE_MSGS_PROTO_PATH SHARE_INSTALL_DIR
-    )
+configure_package_config_file(
+  ${PROJECT_SOURCE_DIR}/cmake/Modules/project-config.cmake.in
+  ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config.cmake
+  INSTALL_DESTINATION ${CMAKE_CONFIG_DEST}
+  PATH_VARS TMP_INCLUDE_INSTALL_DIR SCRIMMAGE_PROTO_PATH
+  SCRIMMAGE_MSGS_PROTO_PATH SHARE_INSTALL_DIR
+  )
 
-  write_basic_package_version_file(
-    ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config-version.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-    )
+write_basic_package_version_file(
+  ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config-version.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion
+  )
 
-  # Install cmake config files
-  install(FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config.cmake
-    ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config-version.cmake
-    DESTINATION ${CMAKE_CONFIG_DEST})
+# Install cmake config files
+install(FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config.cmake
+  ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-config-version.cmake
+  DESTINATION ${CMAKE_CONFIG_DEST})
 
-  # Export project export set to the install tree
+# Export project export set to the install tree
+install(
+  EXPORT ${PROJECT_NAME}-targets
+  DESTINATION ${CMAKE_CONFIG_DEST}
+  )
+
+#############################################################################
+# Install Targets
+#############################################################################
+# Install all mission XML files under share
+install(
+  DIRECTORY missions
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING PATTERN "*.xml"
+  )
+
+# Install all library headers
+install(
+  DIRECTORY include/${PROJECT_NAME}
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.h"
+  )
+
+# Install all plugin configuration files
+install(
+  DIRECTORY include/${PROJECT_NAME}
+  DESTINATION etc
+  FILES_MATCHING PATTERN "*.xml"
+  )
+
+# Install all scrimmage proto headers
+install(
+  DIRECTORY ${PROTO_INCLUDE_DIR}/${PROJECT_NAME}
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.pb.h"
+  )
+
+# Install all project message proto headers
+install(
+  DIRECTORY ${MSGS_INCLUDE_DIR}/${PROJECT_NAME}
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.pb.h"
+  )
+
+# Install the .proto files in case another project wants to use them
+install(
+  DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/src/proto
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING PATTERN "*.proto"
+  )
+
+# Install the message .proto files in case another project wants to use them
+install(
+  DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/msgs
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING PATTERN "*.proto"
+  )
+
+if (NOT EXTERNAL)
+  # Install meshes, terrain, maps that come with scrimmage core
   install(
-    EXPORT ${PROJECT_NAME}-targets
-    DESTINATION ${CMAKE_CONFIG_DEST}
+    DIRECTORY data/gui
+    DESTINATION share/${PROJECT_NAME}/data
     )
+endif()
 
-  #############################################################################
-  # Install Targets
-  #############################################################################
-  # Install all mission XML files under share
-  install(
-    DIRECTORY missions
-    DESTINATION share/${PROJECT_NAME}
-    FILES_MATCHING PATTERN "*.xml"
-    )
-
-  # Install all library headers
-  install(
-    DIRECTORY include/${PROJECT_NAME}
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-    )
-
-  # Install all plugin configuration files
-  install(
-    DIRECTORY include/${PROJECT_NAME}
-    DESTINATION etc
-    FILES_MATCHING PATTERN "*.xml"
-    )
-
-  # Install all scrimmage proto headers
-  install(
-    DIRECTORY ${PROTO_INCLUDE_DIR}/${PROJECT_NAME}
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.pb.h"
-    )
-
-  # Install all project message proto headers
-  install(
-    DIRECTORY ${MSGS_INCLUDE_DIR}/${PROJECT_NAME}
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.pb.h"
-    )
-
-  # Install the .proto files in case another project wants to use them
-  install(
-    DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/src/proto
-    DESTINATION share/${PROJECT_NAME}
-    FILES_MATCHING PATTERN "*.proto"
-    )
-
-  # Install the message .proto files in case another project wants to use them
-  install(
-    DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/msgs
-    DESTINATION share/${PROJECT_NAME}
-    FILES_MATCHING PATTERN "*.proto"
-    )
-
-  if (NOT EXTERNAL)
-    # Install meshes, terrain, maps that come with scrimmage core
-    install(
-      DIRECTORY data/gui
-      DESTINATION share/${PROJECT_NAME}/data
-      )
-  endif()
-
-  # Create the ld.so.conf.d/project.conf file
+# Create the ld.so.conf.d/project.conf file
+if (NOT APPLE)
   file(WRITE
     ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}.conf
     "${CMAKE_INSTALL_PREFIX}/lib\n${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}/plugin_libs"
     )
-  install(
-    FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}.conf
-    DESTINATION /etc/ld.so.conf.d
-    )
-
-  # Install the project-setenv file
-  install(
-    FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-setenv
-    DESTINATION etc/scrimmage/env
-    )
-
-  # Install scrimmage cmake helper files
-  install(
-    DIRECTORY ${PROJECT_SOURCE_DIR}/share/cmake
-    DESTINATION share
-    )
+  option(ENABLE_LD_SO_CONF_INSTALL "Install ${PROJECT_NAME}.conf to /etc/ld.so.conf.d" OFF)
+  if (ENABLE_LD_SO_CONF_INSTALL)
+    install(
+      FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}.conf
+      DESTINATION /etc/ld.so.conf.d
+      )
+  endif()
 endif()
+
+# Install the project-setenv file
+install(
+  FILES ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/${PROJECT_NAME}-setenv
+  DESTINATION etc/scrimmage/env
+  )
+
+# Install scrimmage cmake helper files
+install(
+  DIRECTORY ${PROJECT_SOURCE_DIR}/share/cmake
+  DESTINATION share
+  )
 
 ###############################################################################
 # Binary installation generation

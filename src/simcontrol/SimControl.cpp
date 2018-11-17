@@ -42,6 +42,7 @@
 #include <scrimmage/common/Time.h>
 #include <scrimmage/entity/Contact.h>
 #include <scrimmage/common/RTree.h>
+#include <scrimmage/common/ParameterServer.h>
 #include <scrimmage/entity/Entity.h>
 #include <scrimmage/motion/MotionModel.h>
 #include <scrimmage/motion/Controller.h>
@@ -70,11 +71,17 @@
 #include <memory>
 #include <future> // NOLINT
 
+#if ENABLE_PYTHON_BINDINGS == 1
+#include <pybind11/pybind11.h>
+#endif
+
 #include <GeographicLib/LocalCartesian.hpp>
 
 #include <boost/thread.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/for_each.hpp>
+#include <boost/range/numeric.hpp>
 
 namespace sc = scrimmage;
 namespace sp = scrimmage_proto;
@@ -91,6 +98,7 @@ SimControl::SimControl() :
     id_to_team_map_(std::make_shared<std::unordered_map<int, int>>()),
     id_to_ent_map_(std::make_shared<std::unordered_map<int, EntityPtr>>()),
     time_(std::make_shared<Time>()),
+    param_server_(std::make_shared<ParameterServer>()),
     timer_(Timer()),
     random_(std::make_shared<Random>()),
     plugin_manager_(std::make_shared<PluginManager>()),
@@ -155,16 +163,24 @@ bool SimControl::init() {
 
     // Setup random seed
     if (mp_->params().count("seed") > 0) {
-        random_->seed(std::stoul(mp_->params()["seed"]));
+        auto seed = std::stoul(mp_->params()["seed"]);
+        random_->seed(seed);
+#if ENABLE_PYTHON_BINDINGS == 1
+        pybind11::module::import("random").attr("seed")(seed);
+        try {
+            pybind11::module::import("numpy.random").attr("seed")(seed);
+        } catch (pybind11::error_already_set) {
+            // ignore. numpy not installed
+        }
+#endif
     } else {
         random_->seed();
     }
     log_->write_ascii("Seed: " + std::to_string(random_->get_seed()));
 
-    int max_num_entities = 0;
-    for (auto &kv : mp_->gen_info()) {
-        max_num_entities += kv.second.total_count;
-    }
+    auto get_count = [&](auto &kv) {return kv.second.total_count;};
+    int max_num_entities =
+        boost::accumulate(mp_->gen_info() | ba::transformed(get_count), 0);
 
     rtree_ = std::make_shared<scrimmage::RTree>();
     rtree_->init(max_num_entities);
@@ -259,6 +275,7 @@ bool SimControl::init() {
     info.rtree = rtree_;
     info.pubsub = pubsub_;
     info.time = time_;
+    info.param_server = param_server_;
     info.random = random_;
     info.id_to_team_map = id_to_team_map_;
     info.id_to_ent_map = id_to_ent_map_;
@@ -277,6 +294,7 @@ bool SimControl::init() {
     pub_no_teams_ = sim_plugin_->advertise("GlobalNetwork", "NoTeamsPresent");
     pub_one_team_ = sim_plugin_->advertise("GlobalNetwork", "OneTeamPresent");
     pub_world_point_clicked_ = sim_plugin_->advertise("GlobalNetwork", "WorldPointClicked");
+    pub_custom_key_ = sim_plugin_->advertise("GlobalNetwork", "CustomKeyPress");
 
     contacts_mutex_.lock();
     contacts_->reserve(max_num_entities+1);
@@ -470,7 +488,10 @@ bool SimControl::generate_entities(double t) {
             AttributeMap &attr_map = mp_->entity_attributes()[ent_desc_id];
             bool ent_status = ent->init(attr_map, params,
                 contacts_, mp_, proj_, next_id_, ent_desc_id,
-                plugin_manager_, file_search_, rtree_, pubsub_, time_);
+                plugin_manager_, file_search_, rtree_, pubsub_, time_,
+                param_server_,
+                std::set<std::string>{},
+                [](std::map<std::string, std::string>&){});
             contacts_mutex_.unlock();
 
             if (!ent_status) {
@@ -696,7 +717,6 @@ bool SimControl::run_single_step(int loop_number) {
     // Stay in loop if currently paused.
     bool exit_loop = false;
     do {
-        loop_wait();
 
         // Were we told to exit, externally?
         exit_mutex_.lock();
@@ -778,6 +798,7 @@ bool SimControl::run_single_step(int loop_number) {
     }
 
     // Increment time and loop counter
+    loop_wait();
     set_time(t + dt_);
     prev_paused_ = paused_;
 
@@ -831,11 +852,11 @@ void SimControl::cleanup() {
     }
 
     for (EntityInteractionPtr ent_inter : ent_inters_) {
-        ent_inter->close(t());
+        ent_inter->close_plugin(t());
     }
 
     for (auto &kv : *networks_) {
-        kv.second->close(t());
+        kv.second->close_plugin(t());
     }
 
     run_logging();
@@ -869,7 +890,7 @@ void SimControl::close() {
     pubsub_ = nullptr;
     file_search_ = nullptr;
     rtree_ = nullptr;
-    sim_plugin_->close(t());
+    sim_plugin_->close_plugin(t());
     pub_end_time_ = nullptr;
     pub_ent_gen_ = nullptr;
     pub_ent_rm_ = nullptr;
@@ -878,6 +899,7 @@ void SimControl::close() {
     pub_no_teams_ = nullptr;
     pub_one_team_ = nullptr;
     pub_world_point_clicked_ = nullptr;
+    pub_custom_key_ = nullptr;
     not_ready_.clear();
 }
 
@@ -997,6 +1019,11 @@ void SimControl::run_check_network_msgs() {
                 this->force_exit();
             } else if (it->request_cached()) {
                 outgoing_interface_->send_cached();
+            } else if (it->custom_key() != "") {
+                auto msg = std::make_shared<Message<std::string>>();
+                std::string key(it->custom_key());
+                msg->data = key;
+                pub_custom_key_->publish(msg);
             }
             control.erase(it++);
         }
@@ -1207,7 +1234,10 @@ void SimControl::worker() {
                 auto run = [&](auto &a) {return a->step_autonomy(temp_t, temp_dt);};
                 success = std::all_of(autonomies.begin(), autonomies.end(), run);
             } else if (task_type == Task::Type::CONTROLLER) {
-                success = ent->controller()->step(temp_t, temp_dt);
+                auto &controllers = ent->controllers();
+                br::for_each(controllers, run_callbacks);
+                auto run = [&](auto &c) {return c->step(temp_t, temp_dt);};
+                success = std::all_of(controllers.begin(), controllers.end(), run);
             } else if (task_type == Task::Type::MOTION) {
                 success = ent->motion()->step(temp_t, temp_dt);
             } else if (task_type == Task::Type::SENSOR) {
@@ -1316,6 +1346,14 @@ bool SimControl::run_entities() {
     double motion_dt = dt_ / mp_->motion_multiplier();
     double temp_t = t_;
     for (int i = 0; i < mp_->motion_multiplier(); i++) {
+        // run controllers in a single thread since they are serially connected
+        for (EntityPtr &ent : ents_) {
+            for (auto c : ent->controllers()) {
+                success &= exec_step(c, [&](auto c){return c->step(temp_t, motion_dt);});
+            }
+        }
+
+        // run motion model
         auto step_all = [&](Task::Type type, auto getter) {
             if (entity_thread_types_.count(type)) {
                 success &= add_tasks(type, temp_t, motion_dt);
@@ -1326,8 +1364,6 @@ bool SimControl::run_entities() {
                 }
             }
         };
-
-        step_all(Task::Type::CONTROLLER, [&](auto ent){return ent->controller();});
         step_all(Task::Type::MOTION, [&](auto ent){return ent->motion();});
 
         temp_t += motion_dt;
@@ -1354,7 +1390,7 @@ bool SimControl::run_entities() {
             p->shapes().clear();
         };
         br::for_each(ent->autonomies(), add_shapes);
-        add_shapes(ent->controller());
+        br::for_each(ent->controllers(), add_shapes);
         add_shapes(ent->motion());
     }
     return success;
@@ -1400,19 +1436,24 @@ bool SimControl::output_summary() {
     std::map<int, std::map<std::string, double>> team_metrics;
     std::list<std::string> headers;
 
+    bool metrics_empty = true;
+
     // Loop through each of the metrics plugins.
     for (auto metrics : metrics_) {
-        cout << sc::generate_chars("=", 80) << endl;
-        cout << metrics->name() << endl;
-        cout << sc::generate_chars("=", 80) << endl;
-        metrics->calc_team_scores();
-        metrics->print_team_summaries();
+        if (metrics->get_print_team_summary()) {
+            cout << sc::generate_chars("=", 80) << endl;
+            cout << metrics->name() << endl;
+            cout << sc::generate_chars("=", 80) << endl;
+            metrics->calc_team_scores();
+            metrics->print_team_summaries();
+        }
 
         // Add all elements from individual metrics plugin to overall
         // metrics data structure
         for (auto const &team_str_double : metrics->team_metrics()) {
             team_metrics[team_str_double.first].insert(team_str_double.second.begin(),
                                                        team_str_double.second.end());
+            metrics_empty = false;
         }
 
         // Calculate aggregated team scores:
@@ -1469,13 +1510,15 @@ bool SimControl::output_summary() {
     summary_file.close();
 
     // Print Overall Scores
-    cout << sc::generate_chars("=", 80) << endl;
-    cout << "Overall Scores" << endl;
-    cout << sc::generate_chars("=", 80) << endl;
-    for (auto const &team_score : team_scores) {
-        cout << "Team ID: " << team_score.first << endl;
-        cout << "Score: " << team_score.second << endl;
-        cout << sc::generate_chars("-", 80) << endl;
+    if (!metrics_empty) {
+        cout << sc::generate_chars("=", 80) << endl;
+        cout << "Overall Scores" << endl;
+        cout << sc::generate_chars("=", 80) << endl;
+        for (auto const &team_score : team_scores) {
+            cout << "Team ID: " << team_score.first << endl;
+            cout << "Score: " << team_score.second << endl;
+            cout << sc::generate_chars("-", 80) << endl;
+        }
     }
 
     return true;

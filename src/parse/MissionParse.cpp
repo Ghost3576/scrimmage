@@ -207,7 +207,7 @@ bool MissionParse::parse(const std::string &filename) {
     bool bg_color_result = false;
     std::vector<int> temp_color;
     if (params_.count("background_color") > 0) {
-        bg_color_result = str2vec<int>(params_["background_color"], " ", temp_color, 3);
+        bg_color_result = str2container(params_["background_color"], " ", temp_color, 3);
     }
     if (bg_color_result) {
         background_color_.set_r(temp_color[0]);
@@ -292,6 +292,8 @@ bool MissionParse::parse(const std::string &filename) {
 
             if (node_name == "autonomy") {
                 node_name += std::to_string(orders[nm]["autonomy"]++);
+            } else if (node_name == "controller") {
+                node_name += std::to_string(orders[nm]["controller"]++);
             } else if (node_name == "sensor") {
                 node_name += std::to_string(orders[nm]["sensor"]++);
             }
@@ -325,7 +327,7 @@ bool MissionParse::parse(const std::string &filename) {
 
         rapidxml::xml_attribute<> *nm_attr = script_node->first_attribute("entity_common");
 
-        int autonomy_order = 0, sensor_order = 0;
+        int autonomy_order = 0, controller_order = 0, sensor_order = 0;
         if (nm_attr != 0) {
             std::string nm = nm_attr->value();
             auto it = entity_common.find(nm);
@@ -335,6 +337,7 @@ bool MissionParse::parse(const std::string &filename) {
                 script_info = it->second;
                 entity_attributes_[ent_desc_id] = entity_common_attributes[nm];
                 autonomy_order = orders[nm]["autonomy"];
+                controller_order = orders[nm]["controller"];
                 sensor_order = orders[nm]["sensor"];
             }
         }
@@ -434,6 +437,8 @@ bool MissionParse::parse(const std::string &filename) {
             std::string nm = node->name();
             if (nm == "autonomy") {
                 nm += std::to_string(autonomy_order++);
+            } else if (nm == "controller") {
+                nm += std::to_string(controller_order++);
             } else if (nm == "sensor") {
                 nm += std::to_string(sensor_order++);
             }
@@ -507,7 +512,7 @@ bool MissionParse::parse(const std::string &filename) {
         bool color_status = false;
         std::vector<int> temp_color;
         if (script_info.count("color") > 0) {
-            color_status = str2vec(script_info["color"], " ", temp_color, 3);
+            color_status = str2container(script_info["color"], " ", temp_color, 3);
         }
 
         if (!color_status) {
@@ -539,7 +544,7 @@ bool MissionParse::parse(const std::string &filename) {
 
             // Tokenize rate based on "/"
             std::vector<double> values;
-            bool status = str2vec(script_info["generate_rate"], "/",
+            bool status = str2container(script_info["generate_rate"], "/",
                                   values, 2);
             double rate = -1;
             if (status) {
@@ -577,10 +582,11 @@ bool MissionParse::parse(const std::string &filename) {
         next_gen_times_[ent_desc_id] = start_times;
         gen_info_[ent_desc_id] = gen_info;
 
-        // If the entity block has a "name", save the mapping from entity name
-        // to entity ID
-        if (script_info.count("name")) {
-            entity_name_to_id_[script_info["name"]] = ent_desc_id;
+        // If the entity block has a "tag" attribute, save the mapping from the
+        // tag to the entity block ID
+        rapidxml::xml_attribute<> *tag_attr = script_node->first_attribute("tag");
+        if (tag_attr != 0) {
+            entity_tag_to_id_[tag_attr->value()] = ent_desc_id;
         }
 
         entity_descs_[ent_desc_id++] = script_info;
@@ -794,8 +800,8 @@ std::map<int, int> &MissionParse::ent_id_to_block_id() {
 
 EntityDesc_t &MissionParse::entity_descriptions() { return entity_descs_; }
 
-std::map<std::string, int> & MissionParse::entity_name_to_id() {
-    return entity_name_to_id_;
+std::map<std::string, int> & MissionParse::entity_tag_to_id() {
+    return entity_tag_to_id_;
 }
 
 bool MissionParse::enable_gui() { return enable_gui_; }

@@ -102,8 +102,8 @@ void fpsCallbackFunction(vtkObject* caller, long unsigned int vtkNotUsed(eventId
 
 Updater::Updater() :
         frame_time_(-1.0), update_count(0), inc_follow_(true),
-        dec_follow_(false), view_mode_(ViewMode::FOLLOW), follow_offset_(50),
-        show_helpmenu_(false) {
+        dec_follow_(false), view_mode_(ViewMode::FOLLOW), view_mode_prev_(ViewMode::FREE),
+        follow_offset_(50), follow_vec_(-50, 10, 10), show_helpmenu_(false) {
     prev_time.tv_nsec = 0;
     prev_time.tv_sec = 0;
     max_update_rate_ = 1.0;
@@ -550,14 +550,23 @@ bool Updater::update_camera() {
             camera_pos[1] = y_pos - 6.0;
             camera_pos[2] = z_pos + 2.0;
         } else if (view_mode_ == ViewMode::FOLLOW) {
-            Eigen::Vector3d base_offset(-50, 0, 15);
-            Eigen::Vector3d rel_cam_pos = base_offset.normalized() * follow_offset_;
+
+            if (view_mode_prev_ == ViewMode::FOLLOW) {
+                double currentPos[3];
+                renderer_->GetActiveCamera()->GetPosition(currentPos);
+                double currentFp[3];
+                renderer_->GetActiveCamera()->GetFocalPoint(currentFp);
+                for (int i = 0; i < 3; i++)
+                    follow_vec_[i] = currentPos[i]-currentFp[i];
+                follow_offset_ = follow_vec_.norm();
+            }
+
+            Eigen::Vector3d rel_cam_pos = follow_vec_.normalized() * follow_offset_;
             Eigen::Vector3d unit_vector = rel_cam_pos / rel_cam_pos.norm();
 
             sp::Quaternion sp_quat = it->second->contact.state().orientation();
             sc::Quaternion quat(sp_quat.w(), sp_quat.x(), sp_quat.y(), sp_quat.z());
 
-            unit_vector = quat.rotate(unit_vector);
             Eigen::Vector3d pos = Eigen::Vector3d(x_pos, y_pos, z_pos) +
                 unit_vector * rel_cam_pos.norm();
 
@@ -567,8 +576,7 @@ bool Updater::update_camera() {
 
             // Compute the camera's "up" vector
             Eigen::Vector3d z_axis(0, 0, 1);
-            Eigen::Vector3d up = quat * z_axis;
-            renderer_->GetActiveCamera()->SetViewUp(up(0), up(1), up(2));
+            renderer_->GetActiveCamera()->SetViewUp(z_axis(0), z_axis(1), z_axis(2));
 
         } else if (view_mode_ == ViewMode::FPV) {
             sp::Quaternion sp_quat = it->second->contact.state().orientation();
@@ -597,6 +605,7 @@ bool Updater::update_camera() {
             renderer_->GetActiveCamera()->SetViewUp(up(0), up(1), up(2));
         }
     }
+    view_mode_prev_ = view_mode_;
     reset_camera_ = false;
     renderer_->GetActiveCamera()->SetPosition(camera_pos);
     renderer_->GetActiveCamera()->SetFocalPoint(x_pos_fp, y_pos_fp, z_pos_fp);
@@ -1193,6 +1202,12 @@ void Updater::update_trail(std::shared_ptr<ActorContact> &actor_contact,
     }
 }
 
+void Updater::process_custom_key(std::string &key) {
+    gui_msg_.set_custom_key(key);
+    outgoing_interface_->send_gui_msg(gui_msg_);
+    gui_msg_.set_custom_key("");
+}
+
 void Updater::inc_follow() {
     inc_follow_ = true;
 }
@@ -1267,7 +1282,8 @@ void Updater::toggle_helpmenu() {
             << "w\n"
             << "s\n"
             << "CTRL + left click\n"
-            << "SHIFT + left click\n";
+            << "SHIFT + left click\n"
+            << ";\n";
         helpkeys_actor_->SetInput(stream_helpkeys.str().c_str());
         stream_helpvalues
             << ": quit\n"
@@ -1289,7 +1305,8 @@ void Updater::toggle_helpmenu() {
             << ": wireframe\n"
             << ": solid\n"
             << ": rotate world\n"
-            << ": pan camera\n";
+            << ": pan camera\n"
+            << ": enter custom keypress\n";
         helpvalues_actor_->SetInput(stream_helpvalues.str().c_str());
     } else {
         stream_helpkeys << " ";
@@ -1789,26 +1806,78 @@ bool Updater::draw_plane(const bool &new_shape,
                          vtkSmartPointer<vtkActor> &actor,
                          vtkSmartPointer<vtkPolyDataAlgorithm> &source,
                          vtkSmartPointer<vtkPolyDataMapper> &mapper) {
-    vtkSmartPointer<vtkPlaneSource> planeSource;
-    if (new_shape) {
-        planeSource = vtkSmartPointer<vtkPlaneSource>::New();
-        source = planeSource;
-    } else {
-        planeSource = vtkPlaneSource::SafeDownCast(source);
+  // sanity checks
+  if (std::abs(p.x_length()) < std::numeric_limits<double>::epsilon()
+      || std::abs(p.y_length()) < std::numeric_limits<double>::epsilon()) {
+    std::cout << "Cannot draw plane: bad dimensions (" << p.x_length() << ", " << p.y_length() << ")\n";
+    return false;
+  }
+  // Load texture
+  std::string texture_file, texture_name;
+  texture_name = p.texture();
+  bool texture_found = false;
+  if (!texture_name.empty()) {
+    ConfigParse c_parse;
+    FileSearch file_search;
+    std::map<std::string, std::string> overrides;
+    if (c_parse.parse(overrides, p.texture(), "SCRIMMAGE_DATA_PATH", file_search)) {
+      texture_file = c_parse.directory() + "/" + c_parse.params()["texture"];
+      texture_found = fs::exists(texture_file) && fs::is_regular_file(texture_file);
     }
-    planeSource->SetCenter(p.center().x(), p.center().y(), p.center().z());
-    planeSource->SetNormal(p.normal().x(), p.normal().y(), p.normal().z());
-    planeSource->Update();
+  }
 
-    vtkPolyData* plane_polydata = planeSource->GetOutput();
-#if VTK_MAJOR_VERSION < 6
-    mapper->SetInput(plane_polydata);
-#else
-    mapper->SetInputData(plane_polydata);
-#endif
+  vtkSmartPointer<vtkPlaneSource> planeSource;
+  vtkSmartPointer<vtkJPEGReader> jPEGReader;
+  vtkSmartPointer<vtkTexture> texture;
+  vtkSmartPointer<vtkTextureMapToPlane> texturePlane;
+  jPEGReader = vtkSmartPointer<vtkJPEGReader>::New();
+  texture = vtkSmartPointer<vtkTexture>::New();
+  texturePlane = vtkSmartPointer<vtkTextureMapToPlane>::New();
+  if (new_shape) {
+    planeSource = vtkSmartPointer<vtkPlaneSource>::New();
+    source = planeSource;
+    texture_found ?
+      mapper->SetInputConnection(texturePlane->GetOutputPort()) :
+      mapper->SetInputConnection(planeSource->GetOutputPort());
     actor->SetMapper(mapper);
+  } else {
+    planeSource = vtkPlaneSource::SafeDownCast(source);
+  }
 
-    return true;
+  // update properties
+  Eigen::Vector3d center, point1, point2;
+  scrimmage::Quaternion quat(
+      p.quat().w(), p.quat().x(), p.quat().y(), p.quat().z());
+  center << p.center().x(), p.center().y(), p.center().z();
+  auto x_hat = quat.rotate(Eigen::Vector3d::UnitX());
+  auto y_hat = quat.rotate(Eigen::Vector3d::UnitY());
+
+  // vtk's "center" is actually the bottom left corner
+  center -= x_hat * (p.x_length() / 2.0) + y_hat * (p.y_length() / 2.0);
+
+  // calculate point1 and point2, which define the plane axes
+  point1 = center + x_hat * p.x_length();
+  point2 = center + y_hat * p.y_length();
+  planeSource->SetOrigin(center[0], center[1], center[2]);
+  planeSource->SetPoint1(point1[0], point1[1], point1[2]);
+  planeSource->SetPoint2(point2[0], point2[1], point2[2]);
+
+  if (texture_found) {
+    actor->SetTexture(texture);
+    jPEGReader->SetFileName(texture_file.c_str());
+    texture->SetInputConnection(jPEGReader->GetOutputPort());
+    texturePlane->SetInputConnection(planeSource->GetOutputPort());
+  } else {
+    std::cout << "plane texture not found: " << texture_file << std::endl;
+  }
+
+  // set ambient lighting for the plane
+  if (!p.diffuse_lighting()) {
+    actor->GetProperty()->SetAmbient(1);
+    actor->GetProperty()->SetDiffuse(0);
+  }
+
+  return true;
 }
 
 bool Updater::draw_cube(const bool &new_shape,
@@ -1937,14 +2006,18 @@ bool Updater::draw_text(const bool &new_shape,
         textSource = vtkVectorText::SafeDownCast(source);
     }
 
-    if (t.scale() > 0) {
-        actor->SetScale(t.scale(), t.scale(), t.scale());
-    }
+    if (textSource) {
+        if (t.scale() > 0) {
+            actor->SetScale(t.scale(), t.scale(), t.scale());
+        }
 
-    textSource->SetText(t.text().c_str());
-    actor->SetPosition(t.center().x(), t.center().y(),
-                       t.center().z());
-    return true;
+        textSource->SetText(t.text().c_str());
+        actor->SetPosition(t.center().x(), t.center().y(),
+                           t.center().z());
+        return true;
+    } else {
+        return false;
+    }
 }
 
 void Updater::get_model_texture(std::string name,
@@ -1976,7 +2049,7 @@ void Updater::get_model_texture(std::string name,
         auto rpy_iter = c_parse.params().find("visual_rpy");
         if (rpy_iter != c_parse.params().end()) {
             std::vector<double> tf_rpy = {0.0, 0.0, 0.0};
-            str2vec(rpy_iter->second, " ", tf_rpy, 3);
+            str2container(rpy_iter->second, " ", tf_rpy, 3);
             for (auto& e : tf_rpy) {
                 e = sc::Angles::deg2rad(e);
             }

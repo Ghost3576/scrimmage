@@ -22,6 +22,17 @@ controllers, and reinforcement learning.
 
 [SCRIMMAGE API](http://www.scrimmagesim.org/docs/doxygen/html/index.html)
 
+## Citation
+
+If you use SCRIMMAGE in your research, please cite our research paper:
+
+    @inproceedings{demarco2018,
+        title={Simulating Collaborative Robots in a Massive Multi-Agent Game Environment ({SCRIMMAGE})},
+        author={DeMarco, Kevin and Squires, Eric and Day, Michael and Pippin, Charles},
+        booktitle={Int. Symp. on Distributed Autonomous Robotic Systems},
+        year={2018},
+    }
+
 ## Build SCRIMMAGE
 
 ### Directory Setup
@@ -123,6 +134,11 @@ The GUI's camera can operate in three modes (cycle with 'a' key):
 
 Note: If all of the terrain data does not appear, click on the GUI window with
 your mouse.
+
+## Building on macOS
+
+Refer [here](https://github.com/crichardson332/homebrew-crich_brews) for instructions on installing dependencies and running
+SCRIMMAGE on macOS.
 
 ## Python Bindings
 
@@ -263,6 +279,45 @@ manually before running a mission.
 
     $ source ~/.scrimmage/setup.bash
     $ scrimmage ./missions/straight-no-gui.xml
+
+## Building SCRIMMAGE for CentOS or RedHat
+
+This repository contains a Dockerfile that builds a compiler with C++14
+support, SCRIMMAGE's dependencies, and SCRIMMAGE for CentOS6 or RedHat6. RPMs
+are built inside of the docker image and they can be extracted and install on a
+CentOS or RedHat system. The user can change the package install prefix for all
+RPMs by specifying the `PKG_PREFIX` docker build argument. Building the docker
+image can take several hours:
+
+    $ cd /path/to/scrimmage/ci/dockerfiles
+    $ docker build --build-arg PKG_PREFIX=/opt/scrimmage \
+                   --tag scrimmage/centos6:latest \
+                   --file centos6 .
+
+Extract the RPMs that were built to the host's `rpms` folder:
+
+    $ docker create --name mycontainer scrimmage/centos6:latest
+    $ docker cp mycontainer:/root/rpms ./rpms     # extract the rpms
+    $ docker rm mycontainer                       # clean up container
+
+Copy the `rpms` folder to your CentOS or RedHat system and install the run-time
+dependencies:
+
+    $ cd /path/to/rpms
+    $ rpm -ivh scrimmage_gcc*.rpm \
+             scrimmage_python*.rpm \
+             scrimmage_boost*.rpm \
+             scrimmage_geographiclib*.rpm \
+             scrimmage_jsbsim*.rpm \
+             scrimmage_grpc*.rpm \
+             scrimmage_protobuf*.rpm \
+             scrimmage_0.2.0*.rpm
+
+To test that SCRIMMAGE was installed correctly, run the following command:
+
+    $ export JSBSIM_ROOT=/opt/scrimmage/etc/JSBSim \
+        && source /opt/scrimmage/etc/scrimmage/env/scrimmage-setenv \
+        && scrimmage /opt/scrimmage/share/scrimmage/missions/straight-no-gui.xml
 
 ## Installing and Configuring Open Grid Engine
 

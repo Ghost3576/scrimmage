@@ -131,6 +131,8 @@ class Updater : public vtkCommand {
 
     void next_mode();
 
+    void process_custom_key(std::string &key);
+
     void inc_follow();
     void dec_follow();
 
@@ -286,6 +288,7 @@ class Updater : public vtkCommand {
     bool scale_required_;
 
     ViewMode view_mode_;
+    ViewMode view_mode_prev_;
     bool enable_trails_;
 
     scrimmage_proto::GUIMsg gui_msg_;
@@ -314,6 +317,7 @@ class Updater : public vtkCommand {
     vtkSmartPointer<vtkActor> terrain_actor_;
 
     double follow_offset_;
+    Eigen::Vector3d follow_vec_;
 
     bool reset_camera_ = false;
     CameraResetParams camera_reset_params_;

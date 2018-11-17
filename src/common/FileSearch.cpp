@@ -39,7 +39,6 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/path.hpp>
-#include <boost/foreach.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
@@ -56,6 +55,9 @@ void FileSearch::clear() {cache_.clear();}
 
 boost::optional<std::string> FileSearch::find_mission(std::string mission,
         bool verbose) {
+    if (!boost::algorithm::ends_with(mission, "xml")) {
+        mission = mission + ".xml";
+    }
     mission = expand_user(mission);
     if (fs::exists(mission)) return mission;
 
