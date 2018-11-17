@@ -49,6 +49,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 
+#target altitude of pursuant UAV - defined in the visual_servo xml mission file
+alt_t = 200
+
 class CSVPlot (FileSystemEventHandler):
     def __init__(self):
         parser = argparse.ArgumentParser(description='SCRIMMAGE Plotter')
@@ -110,8 +113,8 @@ class CSVPlot (FileSystemEventHandler):
         self.observer.join()
 
     def plot(self,i):
-        df = pd.read_csv(self.full_path + '/' + self.csv_filename)
-
+        #df = pd.read_csv(self.full_path + '/' + self.csv_filename)
+        df = pd.read_csv(self.csv_filename)
         if df.shape[0] == 0:
             # If there are no rows in the dataframe, just return
             return
@@ -128,6 +131,10 @@ class CSVPlot (FileSystemEventHandler):
                                    df[self.y_axis_vars[i]].values)
 
             self.axarr[i].set_ylabel(self.y_axis_vars[i])
+
+            #checks which of the graphs plots out PID output for altitude and draws a horizantal line at the target alt.
+            if(self.y_axis_vars[i] == "alt"):
+                self.axarr[i].axhline(y=alt_t, xmin=0, xmax=15,c="red",linewidth=0.5, zorder=0)
 
         self.axarr[len(self.axarr)-1].set_xlabel(self.x_axis_vars)
         self.axarr[0].set_title(self.plot_title)
